@@ -97,6 +97,8 @@ function createSB(url,key){
   const hdrs=()=>({'Content-Type':'application/json','apikey':key,'Authorization':'Bearer '+(sess&&sess.access_token||key)});
   const notify=()=>listeners.forEach(cb=>{try{cb(sess?'SIGNED_IN':'SIGNED_OUT',sess)}catch(e){}});
   const save=s=>{sess=s;s?localStorage.setItem('pmtp_s',JSON.stringify(s)):localStorage.removeItem('pmtp_s');notify();};
+  const refreshToken=async()=>{try{if(!sess||!sess.refresh_token)return;const r=await fetch(url+'/auth/v1/token?grant_type=refresh_token',{method:'POST',headers:{'Content-Type':'application/json','apikey':key},body:JSON.stringify({refresh_token:sess.refresh_token})});if(r.ok){const d=await r.json();if(d.access_token)save(d);}}catch(e){}};
+  setInterval(refreshToken,10*60*1000);
   const post=async(path,body)=>{const r=await fetch(url+path,{method:'POST',headers:hdrs(),body:JSON.stringify(body)});return{r,d:await r.json()};};
   const dbReq=async(method,table,filters,body,prefer)=>{
     const q=filters&&filters.length?'?'+filters.join('&'):'';
@@ -345,6 +347,7 @@ function ItemCard({item,mid,highlightId,onEdit,onToggle,onDelete,onCal,onMove,go
                 <button onClick={()=>onMove(mid,'softFollowups',item)} style={{...btn,padding:'4px 9px',fontSize:10,background:'rgba(117,175,177,0.15)',border:'1px solid '+T.teal,color:T.teal}}>→ Soft</button>
                 <button onClick={()=>onMove(mid,'hpTrips',item)} style={{...btn,padding:'4px 9px',fontSize:10,background:'rgba(192,57,43,0.15)',border:'1px solid '+T.red,color:T.red}}>→ HP Trip</button>
               </>}
+              {mid==='hpTrips'&&<button onClick={()=>onMove(mid,'hpFollowups',item)} style={{...btn,padding:'4px 9px',fontSize:10,background:'rgba(212,132,62,0.15)',border:'1px solid '+T.orange,color:T.orange}}>→ Time Sensitive</button>}
               {mid==='components'&&<button onClick={()=>onMove(mid,'hpTrips',item)} style={{...btn,padding:'4px 9px',fontSize:10,background:'rgba(192,57,43,0.15)',border:'1px solid '+T.red,color:T.red}}>→ HP Trip</button>}
             </div>
           </div>
@@ -707,8 +710,9 @@ function VaultView({session,sb,showToast}){
   React.useEffect(()=>{if(session)load();},[session]);
 
   async function load(){
-    const{data,error}=await sb.from('password_vault').select('*').eq('user_id',uid).order('vendor',{ascending:true});
-    if(!error&&data)setEntries(data);
+    const tok=(JSON.parse(localStorage.getItem('pmtp_s')||'null')||{}).access_token||window.PMTP.SUPABASE_KEY;
+    const r=await fetch(window.PMTP.SUPABASE_URL+'/rest/v1/password_vault?user_id=eq.'+uid+'&order=vendor.asc',{headers:{'apikey':window.PMTP.SUPABASE_KEY,'Authorization':'Bearer '+tok}});
+    if(r.ok){const data=await r.json();setEntries(data);}
     setLoaded(true);
   }
 
@@ -717,13 +721,17 @@ function VaultView({session,sb,showToast}){
   async function save(){
     if(!form.vendor.trim()){showToast('Vendor name is required','err');return;}
     if(editId){
-      const{error}=await sb.from('password_vault').update({...form}).eq('id',editId).eq('user_id',uid);
+      const tok=(JSON.parse(localStorage.getItem('pmtp_s')||'null')||{}).access_token||window.PMTP.SUPABASE_KEY;
+      const vr=await fetch(window.PMTP.SUPABASE_URL+'/rest/v1/password_vault?id=eq.'+editId+'&user_id=eq.'+uid,{method:'PATCH',headers:{'Content-Type':'application/json','apikey':window.PMTP.SUPABASE_KEY,'Authorization':'Bearer '+tok,'Prefer':'return=minimal'},body:JSON.stringify({...form})});
+      const error=vr.ok?null:{message:'update failed'};
       if(error){showToast('Could not save','err');return;}
       setEntries(p=>p.map(e=>e.id===editId?{...e,...form}:e));
       showToast('Entry updated!');
     } else {
-      const{data,error}=await sb.from('password_vault').insert([{...form,user_id:uid}]);
-      if(error){showToast('Could not save','err');return;}
+      const newId=crypto.randomUUID();
+      const tok=(JSON.parse(localStorage.getItem('pmtp_s')||'null')||{}).access_token||window.PMTP.SUPABASE_KEY;
+      const vr=await fetch(window.PMTP.SUPABASE_URL+'/rest/v1/password_vault',{method:'POST',headers:{'Content-Type':'application/json','apikey':window.PMTP.SUPABASE_KEY,'Authorization':'Bearer '+tok,'Prefer':'return=minimal'},body:JSON.stringify({...form,id:newId,user_id:uid})});
+      if(!vr.ok){showToast('Could not save','err');return;}
       load();showToast('Entry saved!');
     }
     resetForm();
@@ -731,9 +739,10 @@ function VaultView({session,sb,showToast}){
 
   async function del(id){
     if(!window.confirm('Delete this vault entry? This cannot be undone.'))return;
-    await sb.from('password_vault').delete().eq('id',id).eq('user_id',uid);
     setEntries(p=>p.filter(e=>e.id!==id));
     showToast('Entry removed.');
+    const tok2=(JSON.parse(localStorage.getItem('pmtp_s')||'null')||{}).access_token||window.PMTP.SUPABASE_KEY;
+    await fetch(window.PMTP.SUPABASE_URL+'/rest/v1/password_vault?id=eq.'+id+'&user_id=eq.'+uid,{method:'DELETE',headers:{'apikey':window.PMTP.SUPABASE_KEY,'Authorization':'Bearer '+tok2}});
   }
 
   function edit(e){
@@ -1437,6 +1446,12 @@ function App(){
     setData(p=>({...p,[mid]:item?p[mid].map(i=>i.id===id?entry:i):[...p[mid],entry]}));
     setModal(null);setForm({});showToast(item?'Entry updated.':'Entry added.');
   }
+  async function moveToModule(fromMid,toMid,item){
+    const{error}=await sb.from('dashboard_items').update({module_id:toMid}).eq('id',item.id);
+    if(error){showToast('Could not move item','err');return;}
+    setData(p=>({...p,[fromMid]:(p[fromMid]||[]).filter(x=>x.id!==item.id),[toMid]:[...(p[toMid]||[]),{...item,module_id:toMid}]}));
+    showToast('Moved to Time Sensitive Follow-Ups!');
+  }
   async function toggleDone(mid,id,current){
     const{error}=await sb.from('dashboard_items').update({done:!current}).eq('id',id);
     if(error){showToast('Update failed.','err');return;}
@@ -1647,7 +1662,7 @@ function App(){
                     <ItemCard key={item.id} item={item} mid={mod.id} highlightId={highlightId}
                       onEdit={()=>{setModal({mid:mod.id,item});setForm({...item});setFormErr(false);}}
                       onToggle={()=>toggleDone(mod.id,item.id,item.done)}
-                      onDelete={()=>setConfirm({msg:'Remove "'+item[mod.fields[0].k]+'"?',onConfirm:()=>deleteItem(mod.id,item.id)})}
+                      onMove={mod.id==='hpTrips'?()=>moveToModule('hpTrips','hpFollowups',item):null} onDelete={()=>setConfirm({msg:'Remove "'+item[mod.fields[0].k]+'"?',onConfirm:()=>deleteItem(mod.id,item.id)})}
                       onCal={handleCal} onMove={moveItem} googleTok={googleTok} calLoading={calLoad}/>
                   ))}
                 </div>
