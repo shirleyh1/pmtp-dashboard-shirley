@@ -13,8 +13,8 @@
 <title>PMTP Agent Dashboard</title>
 <script>
 window.PMTP = {
-  SUPABASE_URL:     'https://vezkfitkvhgplwkfmgqz.supabase.co',
-  SUPABASE_KEY:     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZlemtmaXRrdmhncGx3a2ZtZ3F6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU1ODM3NDIsImV4cCI6MjA5MTE1OTc0Mn0.1wL2V9qzFUAmLcIaPLiGDKlF7MDcKkPghfg264v9yYc',
+  SUPABASE_URL:     'https://gfuhzlkpdnbzajvtbwws.supabase.co',
+  SUPABASE_KEY:     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdmdWh6bGtwZG5iemFqdnRid3dzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2MDczMTMsImV4cCI6MjA5MTE4MzMxM30.4yyc2VEf522dqKWfNBR-8ycyYiLxFnaJDyIALf73RAw',
   GOOGLE_CLIENT_ID: '418296313205-r3n6rnja7a5jonhup9d7vaqv1id966it.apps.googleusercontent.com',
   RECONCILIATION_FORM: 'https://docs.google.com/forms/d/e/1FAIpQLSeqTDLmDrTVovpl5VIkZRQTRbsHJL73kAAY1t0UjsIGoSMb_Q/viewform?usp=header',
   KNOWLEDGE_BASE_URL: '', // ← AGENT-SPECIFIC: replace per agent
@@ -1437,29 +1437,33 @@ function App(){
     const m=MODS.find(x=>x.id===mid);
     if(m.fields.filter(f=>f.req).some(f=>!form[f.k]?.trim())){setFormErr(true);return;}
     setFormErr(false);
-    const id=item?.id||uid();
+    const id=item?.id||crypto.randomUUID();
     const item_data={};
     m.fields.forEach(f=>{if(form[f.k]!==undefined)item_data[f.k]=form[f.k];});
-    const{error}=await sb.from('dashboard_items').upsert({id,user_id:session.user.id,module_id:mid,item_data,done:false});
-    if(error){showToast('Could not save.','err');return;}
+    const tok=(JSON.parse(localStorage.getItem('pmtp_s')||'null')||{}).access_token||window.PMTP.SUPABASE_KEY;
+    const sr=await fetch(window.PMTP.SUPABASE_URL+'/rest/v1/dashboard_items',{method:'POST',headers:{'Content-Type':'application/json','apikey':window.PMTP.SUPABASE_KEY,'Authorization':'Bearer '+tok,'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify({id,user_id:session.user.id,module_id:mid,item_data,done:false})});
+    if(!sr.ok){showToast('Could not save.','err');return;}
     const entry={...item_data,id,done:false};
     setData(p=>({...p,[mid]:item?p[mid].map(i=>i.id===id?entry:i):[...p[mid],entry]}));
     setModal(null);setForm({});showToast(item?'Entry updated.':'Entry added.');
   }
   async function moveToModule(fromMid,toMid,item){
-    const{error}=await sb.from('dashboard_items').update({module_id:toMid}).eq('id',item.id);
-    if(error){showToast('Could not move item','err');return;}
+    const tok=(JSON.parse(localStorage.getItem('pmtp_s')||'null')||{}).access_token||window.PMTP.SUPABASE_KEY;
+    const r=await fetch(window.PMTP.SUPABASE_URL+'/rest/v1/dashboard_items?id=eq.'+item.id,{method:'PATCH',headers:{'Content-Type':'application/json','apikey':window.PMTP.SUPABASE_KEY,'Authorization':'Bearer '+tok,'Prefer':'return=minimal'},body:JSON.stringify({module_id:toMid})});
+    if(!r.ok){showToast('Could not move item','err');return;}
     setData(p=>({...p,[fromMid]:(p[fromMid]||[]).filter(x=>x.id!==item.id),[toMid]:[...(p[toMid]||[]),{...item,module_id:toMid}]}));
     showToast('Moved to Time Sensitive Follow-Ups!');
   }
   async function toggleDone(mid,id,current){
-    const{error}=await sb.from('dashboard_items').update({done:!current}).eq('id',id);
-    if(error){showToast('Update failed.','err');return;}
+    const tok=(JSON.parse(localStorage.getItem('pmtp_s')||'null')||{}).access_token||window.PMTP.SUPABASE_KEY;
+    const r=await fetch(window.PMTP.SUPABASE_URL+'/rest/v1/dashboard_items?id=eq.'+id,{method:'PATCH',headers:{'Content-Type':'application/json','apikey':window.PMTP.SUPABASE_KEY,'Authorization':'Bearer '+tok,'Prefer':'return=minimal'},body:JSON.stringify({done:!current})});
+    if(!r.ok){showToast('Update failed.','err');return;}
     setData(p=>({...p,[mid]:p[mid].map(i=>i.id===id?{...i,done:!current}:i)}));
   }
   async function deleteItem(mid,id){
-    const{error}=await sb.from('dashboard_items').delete().eq('id',id);
-    if(error){showToast('Delete failed.','err');return;}
+    const tok=(JSON.parse(localStorage.getItem('pmtp_s')||'null')||{}).access_token||window.PMTP.SUPABASE_KEY;
+    const r=await fetch(window.PMTP.SUPABASE_URL+'/rest/v1/dashboard_items?id=eq.'+id,{method:'DELETE',headers:{'apikey':window.PMTP.SUPABASE_KEY,'Authorization':'Bearer '+tok}});
+    if(!r.ok){showToast('Delete failed.','err');return;}
     setData(p=>({...p,[mid]:p[mid].filter(i=>i.id!==id)}));
     setConfirm(null);showToast('Item removed.');
   }
